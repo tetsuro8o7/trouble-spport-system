@@ -6,9 +6,11 @@ import time
 import io
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+from filelock import FileLock  # 🔒 追加
 
 # --- CSVファイルパス ---
 CSV_PATH = "trouble_list.csv"
+LOCK_PATH = CSV_PATH + ".lock"  # 🔒 ロックファイルパス
 
 # --- データ読み込み ---
 if os.path.exists(CSV_PATH):
@@ -16,7 +18,7 @@ if os.path.exists(CSV_PATH):
 else:
     df = pd.DataFrame(columns=[
         "発生拠点", "発生年月日", "成形機No.", "設備名", "トラブル内容",
-        "原因・是正内容", "対策内容", "対応時間(h)", "対応者", "調査過程", "調査時の注意点"
+        "原因", "是正内容", "対応時間(h)", "対応者", "調査過程", "調査時の注意点"
     ])
 
 # --- BERTモデル読み込み（日本語対応） ---
@@ -105,8 +107,8 @@ if page == "🔍 トラブル検索":
             st.write(f"🔢 **成形機No.**: {row['成形機No.']}")
             st.write(f"🏭 **設備名**: {row['設備名']}")
             st.write(f"💬 **トラブル内容**: {row['トラブル内容']}")
-            st.write(f"🛠 **原因・是正内容**: {row['原因']}")
-            st.write(f"🧰 **是正内容**: {row['是正内容']}")
+            st.write(f"🛠 **原因**: {row['原因']}")
+            st.write(f"🧪 **是正内容**: {row['是正内容']}")
             st.write(f"⏱ **対応時間(h)**: {row['対応時間(h)']}")
             st.write(f"👤 **対応者**: {row['対応者']}")
             st.write(f"🔍 **調査過程**: {row['調査過程']}")
@@ -141,30 +143,43 @@ elif page == "📝 新規登録":
             new_process = st.text_area("調査過程", key="process")
             new_notes = st.text_area("調査時の注意点", key="notes")
             submitted = st.form_submit_button("登録")
-            if submitted:
-                if all([
-                    new_location.strip(), new_date, new_machine.strip(), new_equipment.strip(),
-                    new_content.strip(), new_cause.strip(), new_action.strip(), str(new_time).strip(),
-                    new_person.strip(), new_process.strip(), new_notes.strip()
-                ]):
-                    new_data = {
-                        "発生拠点": new_location,
-                        "発生年月日": new_date.strftime("%Y/%m/%d"),
-                        "成形機No.": new_machine,
-                        "設備名": new_equipment,
-                        "トラブル内容": new_content,
-                        "原因": new_cause,
-                        "是正内容": new_action,
-                        "対応時間(h)": new_time,
-                        "対応者": new_person,
-                        "調査過程": new_process,
-                        "調査時の注意点": new_notes
-                    }
-                    new_df = pd.DataFrame([new_data])
+        if submitted:
+            # 各項目が空でないかチェック
+            if all([
+                new_location,  # selectbox は常に値を持つ
+                new_date,      # date_input も常に値を持つ
+                new_machine.strip(),
+                new_equipment,  # selectbox も常に値を持つ
+                new_content.strip(),
+                new_cause.strip(),
+                new_action.strip(),
+                new_time > 0,  # number_input は 0 以上の数値を入れるように制限可能
+                new_person.strip(),
+                new_process.strip(),
+                new_notes.strip()
+            ]):
+                # 登録処理
+                new_data = {
+                    "発生拠点": new_location,
+                    "発生年月日": new_date.strftime("%Y/%m/%d"),
+                    "成形機No.": new_machine,
+                    "設備名": new_equipment,
+                    "トラブル内容": new_content,
+                    "原因": new_cause,
+                    "是正内容": new_action,
+                    "対応時間(h)": new_time,
+                    "対応者": new_person,
+                    "調査過程": new_process,
+                    "調査時の注意点": new_notes
+                }
+                new_df = pd.DataFrame([new_data])
+                # 🔒 ファイルロックを使って排他制御
+                with FileLock(LOCK_PATH, timeout=10):
                     file_exists = os.path.isfile(CSV_PATH)
                     new_df.to_csv(CSV_PATH, mode='a', index=False, header=not file_exists, encoding='utf-8-sig')
-                    st.toast("✅ 登録が完了しました！")
-                    time.sleep(5)
-                    st.rerun()
-                else:
-                    st.error("⚠全ての項目を入力してください。")
+                st.toast("✅ 登録が完了しました！")
+                time.sleep(5)
+                st.rerun()
+            else:
+                st.error("⚠ 全ての項目を正しく入力してください。")
+
