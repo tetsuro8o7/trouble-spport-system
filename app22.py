@@ -5,7 +5,6 @@ import os
 import datetime
 import time
 import io
-
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from filelock import FileLock
@@ -24,11 +23,38 @@ COLUMNS = [
 ]
 
 # ==============================
+# Secrets 読み込み（必須）
+# ==============================
+def get_main_password() -> str:
+    try:
+        return st.secrets["MAIN_PASSWORD"]
+    except Exception:
+        return None
+
+def get_register_password() -> str:
+    try:
+        return st.secrets["REGISTER_PASSWORD"]
+    except Exception:
+        return None
+
+MAIN_PASSWORD = get_main_password()
+REGISTER_PASSWORD = get_register_password()
+
+# Secrets未設定のときはガイダンス表示して停止
+if MAIN_PASSWORD is None or REGISTER_PASSWORD is None:
+    st.error(
+        "🔒 Secrets が未設定です。Streamlit Cloud の **Settings → Advanced settings → Secrets** に\n"
+        "```\nMAIN_PASSWORD = \"hofu\"\nREGISTER_PASSWORD = \"hozen\"\n```\n"
+        "のように登録してください。"
+    )
+    st.stop()
+
+# ==============================
 # モデル読み込み（キャッシュ）
 # ==============================
 @st.cache_resource
 def load_model():
-    # 日本語Sentence-BERT
+    # 日本語Sentence-BERT（モデルは必要に応じて軽量モデルへ変更可）
     return SentenceTransformer("sonoisa/sentence-bert-base-ja-mean-tokens")
 
 model = load_model()
@@ -40,7 +66,6 @@ def safe_read_csv(path: str, encoding: str = ENCODING) -> pd.DataFrame:
     """壊れたCSVでも落ちないように読み込み。列が欠けたら補完、順序は既存に合わせる。"""
     if not os.path.exists(path):
         return pd.DataFrame(columns=COLUMNS)
-
     try:
         df = pd.read_csv(path, encoding=encoding)
         # 列の補完と並べ替え
@@ -59,12 +84,10 @@ def find_similar_troubles_bert(input_trouble: str, df: pd.DataFrame, top_n: int 
     """BERT類似検索。トラブル内容が空しかない場合は空の結果を返す。"""
     if df.empty or df["トラブル内容"].dropna().empty:
         return pd.DataFrame(columns=df.columns)
-
     troubles = df["トラブル内容"].fillna("").tolist()
     # 全て空なら検索しない
     if all(t.strip() == "" for t in troubles):
         return pd.DataFrame(columns=df.columns)
-
     sentences = troubles + [input_trouble]
     embeddings = model.encode(sentences)
     input_vec = embeddings[-1].reshape(1, -1)
@@ -74,10 +97,10 @@ def find_similar_troubles_bert(input_trouble: str, df: pd.DataFrame, top_n: int 
     # インデックスがdfと対応するように、元の行番号を拾う
     return df.iloc[top_indices]
 
-def check_password(main_password="hofu") -> bool:
-    """共通パスワード認証"""
+def check_password(main_password: str) -> bool:
+    """共通パスワード認証（Secrets由来）"""
     def password_entered():
-        st.session_state["main_password_correct"] = st.session_state["main_password"] == main_password
+        st.session_state["main_password_correct"] = st.session_state.get("main_password", "") == main_password
 
     if "main_password_correct" not in st.session_state:
         st.text_input("🔐 システム起動パスワードを入力してください", type="password",
@@ -91,10 +114,10 @@ def check_password(main_password="hofu") -> bool:
     else:
         return True
 
-def check_register_password(register_password="hozen") -> bool:
-    """新規登録ページ専用パスワード認証"""
+def check_register_password(register_password: str) -> bool:
+    """新規登録ページ専用パスワード認証（Secrets由来）"""
     def password_entered():
-        st.session_state["register_password_correct"] = st.session_state["register_password"] == register_password
+        st.session_state["register_password_correct"] = st.session_state.get("register_password", "") == register_password
 
     if "register_password_correct" not in st.session_state:
         st.text_input("🔐 新規登録ページ用パスワードを入力してください", type="password",
@@ -138,8 +161,8 @@ df = safe_read_csv(CSV_PATH)
 # ==============================
 # 画面構成
 # ==============================
-# --- パスワードチェック ---
-if not check_password():
+# --- パスワードチェック（Secrets） ---
+if not check_password(MAIN_PASSWORD):
     st.stop()
 
 # --- ロゴ（存在時のみ）とタイトル ---
@@ -155,7 +178,7 @@ st.markdown(
     .main { padding-top: 10px; }
     </style>
     <div style='margin-top: -40px; text-align: center;'>
-        <h1 style='color: darkred;'>🚨 トラブル対策支援システム 🚨</h1>
+      <h1 style='color: darkred;'>🚨 トラブル対策支援システム 🚨</h1>
     </div>
     """,
     unsafe_allow_html=True
@@ -172,10 +195,8 @@ page = st.sidebar.radio("ページを選択", ["🔍 トラブル検索", "📝 
 # ==============================
 if page == "🔍 トラブル検索":
     st.subheader("🔍 トラブル検索")
-
     equipment_options = ["すべて"] + sorted(df["設備名"].dropna().unique().tolist())
     selected_equipment = st.selectbox("🏭 設備名でフィルター", equipment_options)
-
     input_trouble = st.text_input("💬 トラブル内容を入力してください")
 
     filtered_df = df.copy()
@@ -199,7 +220,7 @@ if page == "🔍 トラブル検索":
                 st.write(f"🧪 **是正内容**: {row['是正内容']}")
                 st.write(f"⏱ **対応時間(h)**: {row['対応時間(h)']}")
                 st.write(f"👤 **対応者**: {row['対応者']}")
-                st.write(f"🔍 **調査過程**: {row['調査過程']}")
+                st.write(f"🔎 **調査過程**: {row['調査過程']}")
                 st.write(f"⚠️ **調査時の注意点**: {row['調査時の注意点']}")
                 st.markdown("---")
 
@@ -225,9 +246,8 @@ if page == "🔍 トラブル検索":
 # 📝 新規登録ページ
 # ==============================
 elif page == "📝 新規登録":
-    if check_register_password():
+    if check_register_password(REGISTER_PASSWORD):
         st.subheader("📝 トラブル新規登録")
-
         with st.form("trouble_form"):
             new_location = st.selectbox("発生拠点", ["防府", "大津", "アスコ", "美土里", "MNAC", "MAM"], key="location")
             new_date = st.date_input("発生年月日", value=datetime.date.today(), key="date")
@@ -244,6 +264,7 @@ elif page == "📝 新規登録":
             new_person = st.text_input("対応者", key="person")
             new_process = st.text_area("調査過程", key="process")
             new_notes = st.text_area("調査時の注意点", key="notes")
+
             submitted = st.form_submit_button("登録")
 
         if submitted:
@@ -281,7 +302,6 @@ elif page == "📝 新規登録":
                 # --- ロック取得＆読み込み→結合→上書き ---
                 csv_abs = os.path.abspath(CSV_PATH)
                 lock_abs = os.path.abspath(LOCK_PATH)
-
                 with FileLock(lock_abs, timeout=10):
                     existing = safe_read_csv(csv_abs)
                     # 既存の列順に合わせて結合
@@ -289,13 +309,12 @@ elif page == "📝 新規登録":
                         if c not in new_df.columns:
                             new_df[c] = ""
                     combined = pd.concat([existing, new_df[existing.columns]], ignore_index=True)
-
                     # 上書き保存（ヘッダーは常に1回）
                     combined.to_csv(csv_abs, index=False, encoding=ENCODING, lineterminator="\n")
 
                 # --- 書き込み直後の確認（任意） ---
                 if diagnostics_enabled:
-                    st.markdown("#### 🆕 登録直後の確認")
+                    st.markdown("#### 🈺 登録直後の確認")
                     try:
                         tail = pd.read_csv(csv_abs, encoding=ENCODING).tail(3)
                         st.write("末尾3行:", tail)
